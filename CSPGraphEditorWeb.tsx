@@ -137,3 +137,24 @@ export type DomainRepairOptions = {
   maxValuesPerVariable?: number;
   disabledConstraintIds?: string[];
 };
+
+export type SearchAlgorithm =
+  | "backtracking"
+  | "backjumping"
+  | "backmarking"
+  | "forward_checking_gac"
+  | "mac_gac"
+  | "minimum_conflicts";
+
+export type SearchSolveOptions = {
+  algorithm: SearchAlgorithm;
+};
+
+export type SearchSolveResult = {
+  status: "ok" | "inconsistent" | "unsupported" | "error";
+  algorithm: SearchAlgorithm;
+  message?: string;
+  assignment: Record<string, number>;
+  visitedNodes: number;
+  unsupportedConstraints?: string[];
+};
