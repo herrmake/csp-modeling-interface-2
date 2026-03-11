@@ -116,7 +116,6 @@ export type SolverCheckResult = {
   propagationSteps?: PropagationStep[];
 };
 
-
 export type DomainRepairChange = {
   variableId: string;
   suggestedDomain: string;
@@ -137,3 +136,42 @@ export type DomainRepairOptions = {
   maxValuesPerVariable?: number;
   disabledConstraintIds?: string[];
 };
+
+export type SearchAlgorithm =
+  | "backtracking"
+  | "backjumping"
+  | "backmarking"
+  | "forward_checking_gac"
+  | "mac_gac"
+  | "minimum_conflicts";
+
+export type SearchSolveOptions = {
+  algorithm: SearchAlgorithm;
+};
+
+export type SearchSolveResult = {
+  status: "ok" | "inconsistent" | "unsupported" | "error";
+  algorithm: SearchAlgorithm;
+  message?: string;
+  assignment: Record<string, number>;
+  visitedNodes: number;
+  unsupportedConstraints?: string[];
+};
+
+const containerStyle = {
+  fontFamily: "Inter, system-ui, sans-serif",
+  padding: "24px",
+  lineHeight: "1.4",
+};
+
+const CSPGraphEditorWeb = () => (
+  <main style={containerStyle}>
+    <h1>CSP Modeling Interface</h1>
+    <p>
+      Die Oberfläche wurde geladen. Falls nur eine leere Seite sichtbar war, lag das an einem fehlenden
+      bzw. leeren Default-Export dieser Komponente.
+    </p>
+  </main>
+);
+
+export default CSPGraphEditorWeb;
