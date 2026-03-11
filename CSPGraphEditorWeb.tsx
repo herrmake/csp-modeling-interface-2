@@ -158,19 +158,44 @@ export type SearchSolveResult = {
   unsupportedConstraints?: string[];
 };
 
-const containerStyle = {
+const pageStyle = {
   fontFamily: "Inter, system-ui, sans-serif",
   padding: "24px",
   lineHeight: "1.4",
+  color: "#111827",
+};
+
+const cardStyle = {
+  border: "1px solid #e5e7eb",
+  borderRadius: "12px",
+  padding: "16px",
+  marginTop: "16px",
+  backgroundColor: "#ffffff",
+};
+
+const listStyle = {
+  margin: "8px 0 0 20px",
 };
 
 const CSPGraphEditorWeb = () => (
-  <main style={containerStyle}>
-    <h1>CSP Modeling Interface</h1>
-    <p>
-      Die Oberfläche wurde geladen. Falls nur eine leere Seite sichtbar war, lag das an einem fehlenden
-      bzw. leeren Default-Export dieser Komponente.
+  <main style={pageStyle}>
+    <h1 style={{ margin: 0 }}>CSP Modeling Interface</h1>
+    <p style={{ marginTop: "8px" }}>
+      Frontend-Grundgerüst ist aktiv. Die Solver-Typen und die WASM-Adapter sind eingebunden.
     </p>
+
+    <section style={cardStyle}>
+      <h2 style={{ marginTop: 0 }}>Lösungssuche (vorbereitet)</h2>
+      <p style={{ marginBottom: 0 }}>Verfügbare Algorithmus-Optionen:</p>
+      <ul style={listStyle}>
+        <li>Backtracking</li>
+        <li>Backjumping</li>
+        <li>Backmarking</li>
+        <li>Forward Checking mit GAC</li>
+        <li>MAC mit GAC</li>
+        <li>Minimum Conflicts</li>
+      </ul>
+    </section>
   </main>
 );
 
