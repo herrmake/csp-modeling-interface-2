@@ -158,3 +158,7 @@ export type SearchSolveResult = {
   visitedNodes: number;
   unsupportedConstraints?: string[];
 };
+
+const CSPGraphEditorWeb = () => null;
+
+export default CSPGraphEditorWeb;
