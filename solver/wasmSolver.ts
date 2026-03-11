@@ -1,4 +1,9 @@
-import { SearchSolveOptions, SearchSolveResult, SolverModel } from "../CSPGraphEditorWeb";
+import type {
+  SearchSolveOptions,
+  SearchSolveResult,
+  SolverCheckResult,
+  SolverModel,
+} from "../CSPGraphEditorWeb";
 
 type WasmSolverApi = {
   checkConsistencyJson?: (inputJson: string) => string;
@@ -20,6 +25,11 @@ const SEARCH_ALGORITHMS: SearchSolveOptions["algorithm"][] = [
   "minimum_conflicts",
 ];
 
+function getWasmApi(): WasmSolverApi | undefined {
+  if (typeof window === "undefined") return undefined;
+  return window.CSPWasmSolver;
+}
+
 export function getSearchAlgorithmOptions(): SearchSolveOptions["algorithm"][] {
   return [...SEARCH_ALGORITHMS];
 }
@@ -33,6 +43,44 @@ export function estimateSearchRuntime(model: SolverModel): { variableCount: numb
   }, 1);
 
   return { variableCount, domainProductEstimate };
+}
+
+export async function runWasmConsistencyCheck(model: SolverModel): Promise<SolverCheckResult> {
+  const wasm = getWasmApi();
+  if (!wasm?.checkConsistencyJson) {
+    return {
+      status: "error",
+      consistent: false,
+      message: "WASM-Solver ist nicht geladen",
+      removals: [],
+      unsupportedConstraints: [],
+    };
+  }
+
+  try {
+    const raw = wasm.checkConsistencyJson(JSON.stringify(model));
+    const parsed = JSON.parse(raw ?? "{}") as Partial<SolverCheckResult>;
+
+    return {
+      status: parsed.status ?? "error",
+      consistent: Boolean(parsed.consistent),
+      message: parsed.message,
+      removals: parsed.removals ?? [],
+      reducedDomains: parsed.reducedDomains,
+      unsupportedConstraints: parsed.unsupportedConstraints ?? [],
+      conflict: parsed.conflict,
+      conflictAnalysis: parsed.conflictAnalysis,
+      propagationSteps: parsed.propagationSteps,
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      consistent: false,
+      message: error instanceof Error ? error.message : "Fehler bei der Konsistenzprüfung",
+      removals: [],
+      unsupportedConstraints: [],
+    };
+  }
 }
 
 export async function runWasmSearchSolve(
@@ -50,7 +98,7 @@ export async function runWasmSearchSolve(
     };
   }
 
-  const wasm = window.CSPWasmSolver;
+  const wasm = getWasmApi();
   if (!wasm?.solveSearchJson) {
     return {
       status: "error",
