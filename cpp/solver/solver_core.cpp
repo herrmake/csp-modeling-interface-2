@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <deque>
+#include <limits>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -42,6 +43,16 @@ struct State {
   int step = 0;
   std::string wipeoutVar;
   std::set<std::string> conflictCons;
+};
+
+struct SearchOptions {
+  std::string algorithm = "backtracking";
+};
+
+struct SearchAssignment {
+  std::unordered_map<std::string, double> values;
+  bool complete = false;
+  int visitedNodes = 0;
 };
 
 static bool evalRel(double x, double y, const std::string& op) {
@@ -232,6 +243,103 @@ static bool runWithConstraintSubset(const State& base, const std::set<std::strin
     if (keep.count(c.id)) subset.push_back(c);
   }
   return propagate(t, subset);
+}
+
+static bool isConstraintSatisfiedByAssignment(
+    const Constraint& c,
+    const std::unordered_map<std::string, double>& assignment,
+    bool requireComplete) {
+  if (c.type == "unary_bound") {
+    auto it = assignment.find(c.a);
+    if (it == assignment.end()) return !requireComplete;
+    return evalRel(it->second, c.constant, c.op);
+  }
+
+  if (c.type == "binary_rel" || c.type == "binary_rel_offset") {
+    auto itA = assignment.find(c.a);
+    auto itB = assignment.find(c.b);
+    if (itA == assignment.end() || itB == assignment.end()) return !requireComplete;
+    return evalRel(itA->second, itB->second + c.offset, c.op);
+  }
+
+  if (c.type == "all_different") {
+    std::unordered_set<double> seen;
+    for (const auto& varId : c.scope) {
+      auto it = assignment.find(varId);
+      if (it == assignment.end()) {
+        if (requireComplete) return false;
+        continue;
+      }
+      if (seen.count(it->second)) return false;
+      seen.insert(it->second);
+    }
+    return true;
+  }
+
+  return false;
+}
+
+static std::string chooseNextUnassignedVar(
+    const State& s,
+    const std::unordered_map<std::string, double>& assignment) {
+  std::string best;
+  size_t bestDomain = std::numeric_limits<size_t>::max();
+  for (const auto& it : s.dom) {
+    if (assignment.count(it.first)) continue;
+    if (it.second.size() < bestDomain) {
+      bestDomain = it.second.size();
+      best = it.first;
+    }
+  }
+  return best;
+}
+
+static bool violatesAnyConstraintEarly(const State& s, const std::unordered_map<std::string, double>& assignment) {
+  for (const auto& c : s.constraints) {
+    if (!isConstraintSatisfiedByAssignment(c, assignment, false)) return true;
+  }
+  return false;
+}
+
+static bool allConstraintsSatisfied(const State& s, const std::unordered_map<std::string, double>& assignment) {
+  for (const auto& c : s.constraints) {
+    if (!isConstraintSatisfiedByAssignment(c, assignment, true)) return false;
+  }
+  return true;
+}
+
+static bool backtrackSearch(
+    const State& s,
+    std::unordered_map<std::string, double>& assignment,
+    SearchAssignment& result) {
+  result.visitedNodes += 1;
+  if (assignment.size() == s.dom.size()) {
+    if (allConstraintsSatisfied(s, assignment)) {
+      result.values = assignment;
+      result.complete = true;
+      return true;
+    }
+    return false;
+  }
+
+  std::string nextVar = chooseNextUnassignedVar(s, assignment);
+  if (nextVar.empty()) return false;
+
+  auto dIt = s.dom.find(nextVar);
+  if (dIt == s.dom.end()) return false;
+
+  std::vector<double> domain = dIt->second;
+  std::sort(domain.begin(), domain.end());
+
+  for (double value : domain) {
+    assignment[nextVar] = value;
+    if (!violatesAnyConstraintEarly(s, assignment)) {
+      if (backtrackSearch(s, assignment, result)) return true;
+    }
+    assignment.erase(nextVar);
+  }
+
+  return false;
 }
 
 static val buildReducedDomains(const State& s) {
@@ -445,8 +553,57 @@ std::string checkConsistencyJson(const std::string& inputJson) {
   return JSON.call<std::string>("stringify", out);
 }
 
+std::string solveSearchJson(const std::string& inputJson) {
+  val JSON = val::global("JSON");
+  val input = JSON.call<val>("parse", val(inputJson));
+  val model = input["model"];
+
+  SearchOptions options;
+  if (input.hasOwnProperty(std::string("options")) && input["options"].hasOwnProperty(std::string("algorithm"))) {
+    options.algorithm = input["options"]["algorithm"].as<std::string>();
+  }
+
+  std::vector<std::string> unsupported;
+  State s = loadFromJsonVal(model, unsupported);
+
+  val out = val::object();
+  out.set("algorithm", options.algorithm);
+
+  if (options.algorithm != "backtracking") {
+    out.set("status", std::string("unsupported"));
+    out.set("message", std::string("Algorithmus ist vorbereitet, aber noch nicht implementiert"));
+    out.set("visitedNodes", 0);
+    out.set("assignment", val::object());
+    out.set("unsupportedConstraints", val::array());
+    return JSON.call<std::string>("stringify", out);
+  }
+
+  std::unordered_map<std::string, double> assignment;
+  SearchAssignment result;
+  bool solved = backtrackSearch(s, assignment, result);
+
+  out.set("status", solved ? std::string("ok") : std::string("inconsistent"));
+  out.set("message", solved ? std::string("Lösung mit Backtracking gefunden") : std::string("Keine Lösung mit Backtracking gefunden"));
+  out.set("visitedNodes", result.visitedNodes);
+
+  val assign = val::object();
+  if (solved) {
+    std::vector<std::string> keys;
+    for (const auto& it : result.values) keys.push_back(it.first);
+    std::sort(keys.begin(), keys.end());
+    for (const auto& key : keys) assign.set(key, result.values[key]);
+  }
+  out.set("assignment", assign);
+
+  val uns = val::array();
+  for (unsigned i = 0; i < unsupported.size(); ++i) uns.set(i, unsupported[i]);
+  out.set("unsupportedConstraints", uns);
+  return JSON.call<std::string>("stringify", out);
+}
+
 }  // namespace csp
 
 EMSCRIPTEN_BINDINGS(csp_solver_module) {
   function("checkConsistencyJson", &csp::checkConsistencyJson);
+  function("solveSearchJson", &csp::solveSearchJson);
 }

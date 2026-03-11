@@ -1,71 +1,135 @@
-# WASM Solver Integration (v1)
+import type {
+  SearchSolveOptions,
+  SearchSolveResult,
+  SolverCheckResult,
+  SolverModel,
+} from "../CSPGraphEditorWeb";
 
-## 1) Architecture (production-oriented)
+type WasmSolverApi = {
+  checkConsistencyJson?: (inputJson: string) => string;
+  solveSearchJson?: (inputJson: string) => string;
+};
 
-- **Frontend (`CSPGraphEditorWeb.tsx`)**
-  - builds graph model (`variables`, active `constraints`),
-  - calls `runWasmConsistencyCheck(model)`,
-  - consumes structured conflict diagnostics for UI/Conflict Inspector.
-- **TypeScript adapter (`solver/wasmSolver.ts`)**
-  - stable transport API for browser,
-  - uses WASM (`window.CSPWasmSolver.checkConsistencyJson`) when possible,
-  - uses TS fallback for `expr_rel` and no-WASM environments,
-  - normalizes output into GUI-ready `SolverCheckResult`.
-- **Normalizer (`solver/termNormalizer.ts`)**
-  - converts graph terms to solver subset constraints,
-  - reports unsupported constraints explicitly.
-- **C++ core (`cpp/solver/solver_core.cpp`)**
-  - queue-based propagation for GAC-style consistency checking,
-  - records value-removal explanations,
-  - reconstructs + greedily reduces conflict core,
-  - emits conflict-analysis payload (participation, ranking, propagation trail).
-- **WASM binding boundary (Embind)**
-  - single pure JSON function (`checkConsistencyJson`),
-  - backend-ready design (same JSON contract can be reused by native service wrappers).
+declare global {
+  interface Window {
+    CSPWasmSolver?: WasmSolverApi;
+  }
+}
 
-## 2) Input model contract
+const SEARCH_ALGORITHMS: SearchSolveOptions["algorithm"][] = [
+  "backtracking",
+  "backjumping",
+  "backmarking",
+  "forward_checking_gac",
+  "mac_gac",
+  "minimum_conflicts",
+];
 
-Defined in `solver/solverTypes.ts`:
+function getWasmApi(): WasmSolverApi | undefined {
+  if (typeof window === "undefined") return undefined;
+  return window.CSPWasmSolver;
+}
 
-- `SolverModel`
-  - `variables[]` with discrete numeric domains,
-  - `constraints[]` with typed payloads (`unary_bound`, `binary_rel`, `binary_rel_offset`, `all_different`, `expr_rel`),
-  - optional metadata/options fields.
+export function getSearchAlgorithmOptions(): SearchSolveOptions["algorithm"][] {
+  return [...SEARCH_ALGORITHMS];
+}
 
-## 3) Output/result contract (GUI conflict-inspector ready)
+export function estimateSearchRuntime(model: SolverModel): { variableCount: number; domainProductEstimate: number } {
+  const variableCount = model.variables.length;
+  const domainProductEstimate = model.variables.reduce((acc, variable) => {
+    const size = Math.max(1, variable.domain.length);
+    if (acc > Number.MAX_SAFE_INTEGER / size) return Number.MAX_SAFE_INTEGER;
+    return acc * size;
+  }, 1);
 
-`SolverCheckResult` includes:
+  return { variableCount, domainProductEstimate };
+}
 
-- **Status**: `ok | inconsistent | unsupported | error`
-- **Consistency flag**
-- **Reduced domains** (`reducedDomains`)
-- **Value removals** (`removals`) with explanation
-- **Propagation timeline** (`propagationSteps`)
-- **Conflict core** (`conflict`) with wipeout variable and reduced core IDs
-- **Conflict analysis** (`conflictAnalysis`)
-  - `core`
-  - `participation` (direct/indirect constraints+variables)
-  - `propagationTrail`
-  - `causeRanking` (simple relevance score)
-- **Unsupported constraints** (`unsupportedConstraints`)
+export async function runWasmConsistencyCheck(model: SolverModel): Promise<SolverCheckResult> {
+  const wasm = getWasmApi();
+  if (!wasm?.checkConsistencyJson) {
+    return {
+      status: "error",
+      consistent: false,
+      message: "WASM-Solver ist nicht geladen",
+      removals: [],
+      unsupportedConstraints: [],
+    };
+  }
 
-This contract is designed for direct use by a future Conflict Inspector UI.
+  try {
+    const raw = wasm.checkConsistencyJson(JSON.stringify(model));
+    const parsed = JSON.parse(raw ?? "{}") as Partial<SolverCheckResult>;
 
-## 4) Supported solver subset (v1)
+    return {
+      status: parsed.status ?? "error",
+      consistent: Boolean(parsed.consistent),
+      message: parsed.message,
+      removals: parsed.removals ?? [],
+      reducedDomains: parsed.reducedDomains,
+      unsupportedConstraints: parsed.unsupportedConstraints ?? [],
+      conflict: parsed.conflict,
+      conflictAnalysis: parsed.conflictAnalysis,
+      propagationSteps: parsed.propagationSteps,
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      consistent: false,
+      message: error instanceof Error ? error.message : "Fehler bei der Konsistenzprüfung",
+      removals: [],
+      unsupportedConstraints: [],
+    };
+  }
+}
 
-- Unary bounds: `X < c`, `X <= c`, `X > c`, `X >= c`, `X == c`, `X != c`
-- Binary relations: `X < Y`, `X <= Y`, `X > Y`, `X >= Y`, `X == Y`, `X != Y`
-- Affine offsets: `X == Y + c`, `X + c1 <= Y + c2`, `X - c >= 0`
-- Conjunction: `atom AND atom AND ...`
-- Global shorthand: `allDifferent(X,Y,...)`
-- Expression relations (`expr_rel`) with allowed comparison operators are solved via TS fallback
-  (e.g. `X == X2 + 200`, `sin(X) <= Y + 3`).
+export async function runWasmSearchSolve(
+  model: SolverModel,
+  options: SearchSolveOptions,
+): Promise<SearchSolveResult> {
+  if (!SEARCH_ALGORITHMS.includes(options.algorithm)) {
+    return {
+      status: "error",
+      algorithm: options.algorithm,
+      message: "Unbekannter Suchalgorithmus",
+      assignment: {},
+      visitedNodes: 0,
+      unsupportedConstraints: [],
+    };
+  }
 
-## 5) Build (WASM)
+  const wasm = getWasmApi();
+  if (!wasm?.solveSearchJson) {
+    return {
+      status: "error",
+      algorithm: options.algorithm,
+      message: "WASM-Solver ist nicht geladen",
+      assignment: {},
+      visitedNodes: 0,
+      unsupportedConstraints: [],
+    };
+  }
 
-```bash
-cd cpp/solver
-./build_wasm.sh
-```
+  try {
+    const raw = wasm.solveSearchJson(JSON.stringify({ model, options }));
+    const parsed = JSON.parse(raw ?? "{}") as Partial<SearchSolveResult>;
 
-Load generated `public/solver/solver_wasm.js` and `solver_wasm.wasm` in the web app.
+    return {
+      status: parsed.status ?? "error",
+      algorithm: (parsed.algorithm as SearchSolveOptions["algorithm"]) ?? options.algorithm,
+      message: parsed.message,
+      assignment: parsed.assignment ?? {},
+      visitedNodes: Number(parsed.visitedNodes ?? 0),
+      unsupportedConstraints: parsed.unsupportedConstraints ?? [],
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      algorithm: options.algorithm,
+      message: error instanceof Error ? error.message : "Unbekannter Fehler bei der Lösungssuche",
+      assignment: {},
+      visitedNodes: 0,
+      unsupportedConstraints: [],
+    };
+  }
+}
